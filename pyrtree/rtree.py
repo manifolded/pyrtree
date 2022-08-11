@@ -34,6 +34,7 @@ class RTree(object):
         self.rect_pool = array.array('d')
         self.node_pool = array.array('L')
         self.leaf_pool = [] # leaf objects. 
+        self.inserted_indices = {}
 
         self.cursor = _NodeCursor.create(self, NullRect)
 
@@ -84,6 +85,7 @@ class _NodeCursor(object):
         rect.swapped_x = True # Mark as leaf by setting the xswap flag.
         res = _NodeCursor.create(rooto, rect)
         idx = res.index
+        rooto.inserted_indices[leaf_obj] = idx
         res.first_child = rooto.leaf_count
         rooto.leaf_count += 1
         res.next_sibling = 0
@@ -132,6 +134,13 @@ class _NodeCursor(object):
                            self.rect, 
                            self.first_child,
                            self.next_sibling)
+
+    def inserted_index(self):
+        if self.is_leaf():
+            # Reverse lookup from inserted_indices dict
+            for in_idx, idx in self.root.inserted_indices.items():
+                if idx == self.index:
+                    return in_idx
 
     def _become(self, index):
         recti = index * 4
@@ -196,6 +205,7 @@ class _NodeCursor(object):
 
     def insert(self, leafo, leafrect):
         index = self.index
+        self.root.inserted_indices[leafo] = self.index
 
         # tail recursion, made into loop:
         while True:
