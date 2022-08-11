@@ -34,7 +34,7 @@ class RTree(object):
         self.rect_pool = array.array('d')
         self.node_pool = array.array('L')
         self.leaf_pool = [] # leaf objects. 
-        self.inserted_indices = {}
+        self.inserted_indices = [] # store mapping between node index and user provided inserted index
 
         self.cursor = _NodeCursor.create(self, NullRect)
 
@@ -49,6 +49,8 @@ class RTree(object):
 
     def query_rect(self, r):
         for x in self.cursor.query_rect(r): yield x
+    def query_rect_leaves_only(self, r):
+        for x in self.cursor.query_rect_leaves_only(r): yield x
     def query_point(self, p):
         for x in self.cursor.query_point(p): yield x
     def walk(self,pred):
@@ -85,7 +87,9 @@ class _NodeCursor(object):
         rect.swapped_x = True # Mark as leaf by setting the xswap flag.
         res = _NodeCursor.create(rooto, rect)
         idx = res.index
-        rooto.inserted_indices[leaf_obj] = idx
+        # inserted index must be recorded here because self.index is always zero in 'insert()',
+        # Also, inserted index is only sensible for leaf nodes.
+        _NodeCursor.record_inserted_index(rooto, idx, leaf_obj)
         res.first_child = rooto.leaf_count
         rooto.leaf_count += 1
         res.next_sibling = 0
@@ -94,6 +98,12 @@ class _NodeCursor(object):
         res._become(idx)
         assert(res.is_leaf())
         return res
+    
+    @classmethod
+    def record_inserted_index(cls, rooto, node_index, inserted_index):
+        # indexed as (index, element) = (node_index, inserted_index)
+        rooto.inserted_indices.extend([None] * (node_index - len(rooto.inserted_indices) + 1))
+        rooto.inserted_indices[node_index] = inserted_index
 
     __slots__ = ("root","npool","rpool","index","rect","next_sibling","first_child")
 
@@ -121,6 +131,13 @@ class _NodeCursor(object):
         for rr in self.walk(p):
             yield rr
 
+    def query_rect_leaves_only(self, r):
+        """ Return things that intersect with 'r'. """
+        def p(o,x): return r.does_intersect(o.rect)
+        for rr in self.walk(p):
+            if rr.is_leaf():
+                yield rr
+
     def query_point(self,point):
         """ Query by a point """
         def p(o,x): return o.rect.does_containpoint(point)
@@ -135,33 +152,35 @@ class _NodeCursor(object):
                            self.first_child,
                            self.next_sibling)
 
-    def inserted_index(self):
+    def retrieve_inserted_index(self):
         if self.is_leaf():
-            # Reverse lookup from inserted_indices dict
-            for in_idx, idx in self.root.inserted_indices.items():
-                if idx == self.index:
-                    return in_idx
+            return self.root.inserted_indices[self.index]
 
     def _become(self, index):
         recti = index * 4
         nodei = index * 2
         rp = self.rpool
+        # Retrieve the parameters for Rect()
         x = rp[recti]
         y = rp[recti+1]
         xx = rp[recti+2]
         yy = rp[recti+3]
-
+        # Construct a suitable Rect()
         if (x == 0.0 and y == 0.0 and xx == 0.0 and yy == 0.0): 
             self.rect = NullRect
         else:
             self.rect = Rect(x,y,xx,yy)
-
+        # Retrieve the heredity data
         self.next_sibling = self.npool[nodei]
         self.first_child = self.npool[nodei + 1]
+        # And finally assume the correct index
         self.index = index
+        # Congratulations, we are now a proxy for the node at that index.
+        # Note that though we reassigned a _NodeCursor, we did not change the tree.
 
     def is_leaf(self):
         return self.rect.swapped_x
+        # Why doesn't 'is_leaf()' check 'leaf_pool'? Is the operation too expensive?
 
     def has_children(self):
         return not self.is_leaf() and 0 != self.first_child
@@ -177,15 +196,20 @@ class _NodeCursor(object):
         c._become(self.first_child)
         return c
 
+    # This is a direct test of the node's absence of children. 
+    #   Shouldn't this be used instead of 'is_leaf()'?
     def leaf_obj(self):
         if self.is_leaf(): return self.root.leaf_pool[self.first_child]
         else: return None
 
     def _save_back(self):
         rp = self.rpool
+
+        # Construct pointers to indexed node data arrays
         recti = self.index * 4
         nodei = self.index * 2
 
+        # Write out Rect() params
         if self.rect is not NullRect:
             self.rect.write_raw_coords(rp, recti)
         else: 
@@ -194,9 +218,14 @@ class _NodeCursor(object):
             rp[recti+2] = 0
             rp[recti+3] = 0
 
+        # Write out heredity params
         self.npool[nodei] = self.next_sibling
         self.npool[nodei + 1] = self.first_child
-    
+
+        # As best I can tell this operation only updates an existing node. The node is not new and 
+        # thus should not be recorded in 'inserted_indices'.
+
+
     def nchildren(self):
         i = self.index
         c = 0
@@ -204,8 +233,8 @@ class _NodeCursor(object):
         return c
 
     def insert(self, leafo, leafrect):
+        # In all my experiments with this code self.index is always zero here.
         index = self.index
-        self.root.inserted_indices[leafo] = self.index
 
         # tail recursion, made into loop:
         while True:
@@ -298,11 +327,13 @@ class _NodeCursor(object):
     def children(self):
         if (0 == self.first_child): return
 
+        # Cache current node's contents
         idx = self.index
         fc = self.first_child
         ns = self.next_sibling
         r = self.rect
 
+        # Embody each of the child nodes in succession
         self._become(self.first_child)
         while True:
             yield self
@@ -312,10 +343,13 @@ class _NodeCursor(object):
 
         # Go back to becoming the same node we were.
         #self._become(idx)
+        # Restore current node's contents
         self.index = idx
         self.first_child = fc
         self.next_sibling = ns
         self.rect = r
+        # In this case we only temporarily embodied the children. Our node's index hasn't really changed.
+        # At no time was any node's index permanently reassigned.
 
 def avg_diagonals(node, onodes, memo_tab):
     nidx = node.index
