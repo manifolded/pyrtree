@@ -26,7 +26,7 @@ point_res = t.query_point( (x,y) )
 rect_res = t.query_rect( Rect(x,y,xx,yy) )
 
 ... retrieving input indices from query results
-[n.inserted_index for n in rect_res]
+[n.retrieve_inserted_index() for n in rect_res]
 
 ```
 IMPORTANT: Query results include intermediate nodes which are invalidated as they get iterated over: so if you only want your leaf objects back: (a near-future TODO: a convenience wrapper) real_point_res = [r.leaf_obj() for r in t.query_point( (x,y) ) if r.is_leaf()] ```
