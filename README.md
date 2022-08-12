@@ -23,7 +23,7 @@ t.insert(some_kind_of_object,Rect(min_x,min_y,max_x,max_y)
 
 ... querying:
 point_res = t.query_point( (x,y) )
-rect_res = t.query_rect( Rect(x,y,xx,yy) )
+rect_res = t.query_rect_leaves_only( Rect(x,y,xx,yy) )
 
 ... retrieving input indices from query results
 [n.retrieve_inserted_index() for n in rect_res]
